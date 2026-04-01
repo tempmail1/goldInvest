@@ -2,7 +2,7 @@ name: Quant Dual-Core Sniper
 
 on:
   schedule:
-    - cron: '10,25,40,55 * * * *'
+    - cron: '0,15,30,45 * * * *'
   
   workflow_dispatch:
 
