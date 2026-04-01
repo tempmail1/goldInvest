@@ -302,6 +302,7 @@ class DualCoreSniper:
         # ---------------------------------
         if self.sd.get('position', 'NONE') == 'NONE' and not self.sd['daily_alerts']:
             logger.info("🛌 阵地静默。不在多头顺风区，安心让资金在 [逆回购] 里赚取年化复利。")
+            self.push_alert("维持现状", f"阵地静默。不在多头顺风区，安心让资金在 [逆回购] 里赚取年化复利。\n\n{base_info}")
         elif self.sd.get('position', 'NONE') != 'NONE' and not self.sd['daily_alerts']:
             logger.info("🛡️ 重兵把守中。已经全仓在车上，关闭软件，享受利润奔跑，无视盘中洗盘。")
 
