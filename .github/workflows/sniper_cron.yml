@@ -1,0 +1,49 @@
+name: Quant Dual-Core Sniper
+
+on:
+  schedule:
+    # ⏱️ 精准时区调度:
+    # 0,30: 每小时的 0 分和 30 分触发
+    # 23,0-17: 对应 UTC 时间的 23:00 到 17:00 (即北京时间的 07:00 到次日 01:00)
+    - cron: '0,30 23,0-17 * * *'
+  
+  workflow_dispatch:
+
+jobs:
+  run-sniper:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Run Macro Sniper Engine
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          AUTH_CODE: ${{ secrets.AUTH_CODE }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: |
+          python sniper_github.py
+          
+      - name: Commit State and Logs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 自动更新：状态持久化与运行日志"
+          # 将日志文件也加入到 Git 提交列表中，使其得以持久保存
+          file_pattern: 'sniper_state.json sniper_run.log'
