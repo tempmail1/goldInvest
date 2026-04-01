@@ -161,7 +161,7 @@ class DualCoreSniper:
         try:
             # 1. 采用纯文本构建邮件正文 (去除 markdown 的 **)
             clean_content = content.replace("**", "")
-            text_body = f"【告警标题】：{title}\n\n{clean_content}\n\n-----------------------------\n由 宏观双核量化系统 (GitHub Actions) 自动发送"
+            text_body = f"{clean_content}"
 
             msg = MIMEMultipart()
 
@@ -244,10 +244,10 @@ class DualCoreSniper:
         logger.info(f"▶ 均线: MA20 ${ma20:.2f} | MA60 ${ma60:.2f} | MA200 ${ma200:.2f} | 多头排列: {'✅' if trend_up else '❌'}")
         logger.info(f"▶ 宏观 Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f}) (分界线 {Config.MACRO_THRESHOLD}) | VIX: {current_vix:.2f}")
 
-        base_info = (f"金价: ${c_price:.2f} | RSI: {rsi:.2f}\n"
-                     f"MA20: ${ma20:.2f} | MA60: ${ma60:.2f}\n"
+        base_info = (f"现价: ${c_price:.2f} | RSI: {rsi:.2f}\n"
+                     f"MA20: ${ma20:.2f} | MA60: ${ma60:.2f} | MA200 ${ma200:.2f} \n"
                      f"多头排列: {'是' if trend_up else '否'}\n"
-                     f"宏观Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f})")
+                     f"宏观Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f}) | VIX: {current_vix:.2f}")
 
         # ---------------------------------
         # 🚪 防守与离场决策
