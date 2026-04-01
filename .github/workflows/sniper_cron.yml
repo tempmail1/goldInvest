@@ -2,10 +2,13 @@ name: Quant Dual-Core Sniper
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '0 * * * *'
   
   workflow_dispatch:
-
+  # 3. 🌟 新增：外部专属接口 (Webhook) 监听器
+  repository_dispatch:
+    # 这里的名字可以随便起，它是外部调用时的暗号 (Event Type)
+    types: [trigger-sniper]
 # 🛠️ 核心修复：强制底层插件使用 Node.js 24，消除官方过时警告
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
