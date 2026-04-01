@@ -51,8 +51,7 @@ class LocalStateManager:
     def __init__(self):
         self.state_file = Config.STATE_FILE
         self.state = {
-            "gold_state": "NONE",
-            "pool_state": "CASH",
+            "position": "NONE",
             "left_stop_price": 0.0,
             "current_date": "",
             "daily_alerts": []
@@ -187,89 +186,129 @@ class DualCoreSniper:
             logger.error(f"❌ 告警邮件发送失败: {e}")
 
     def run_scan(self):
+        current_time = datetime.now().strftime('%H:%M:%S')
         today = datetime.now().strftime('%Y-%m-%d')
 
-        if self.sd['current_date'] != today:
+        # 每日重置日内防轰炸锁 (适配 JSON：将 set() 改为 [] 列表)
+        # 注意：此处使用 self.sd 替代原有的 self.state 对象
+        if self.sd.get('current_date') != today:
             self.sd['current_date'] = today
             self.sd['daily_alerts'] = []
-            logger.info(f"🌅 新交易日 [{today}] 开启，状态重置。")
+            logger.info(f"\n🌅 新交易日 [{today}] 开启，阵地雷达已刷新。")
 
-        logger.info("📡 启动双核宏观扫描...")
+        logger.info(f"\n[{current_time}] 📡 启动 Z-Score 宏观扫描与均线核对...")
 
-        gold = self.engine.get_yahoo_data("GC=F")
-        qqq = self.engine.get_yahoo_data("QQQ")
-        dia = self.engine.get_yahoo_data("DIA")
+        # 1. 拉取数据 (保证充足的历史数据用于滚动计算)
+        gold = self.engine.get_yahoo_data("GC=F", period="2y")
         tips = self.engine.get_fred_tips()
-        dxy = self.engine.get_yahoo_data("DX-Y.NYB")
-        vix = self.engine.get_yahoo_data("^VIX")
+        dxy = self.engine.get_yahoo_data("DX-Y.NYB", period="1y")
+        vix = self.engine.get_yahoo_data("^VIX", period="1y")
 
-        if any(v is None for v in [gold, qqq, dia, tips, dxy, vix]):
-            logger.warning("⚠️ 数据链路异常，放弃本次执行。")
+        if any(v is None for v in [gold, tips, dxy, vix]):
+            logger.warning("⚠️ 数据链路异常，等待下一次扫描。")
             return
 
-        gc_price, gc_ma20, gc_ma60 = gold.iloc[-1], gold.tail(20).mean(), gold.tail(60).mean()
-        gc_target = max(gold.tail(200).mean(), gold.tail(252).max() * 0.80)
-        gc_trend_up = gc_ma20 > gc_ma60
-        gc_rsi = self.calc_rsi(gold).iloc[-1]
+        # 2. 技术指标计算
+        c_price = gold.iloc[-1]
+        ma20 = gold.tail(20).mean()
+        ma60 = gold.tail(60).mean()
+        ma200 = gold.tail(200).mean()
+        year_high = gold.tail(252).max()
 
-        qqq_price, qqq_ma60 = qqq.iloc[-1], qqq.tail(60).mean()
-        dia_price, dia_ma60 = dia.iloc[-1], dia.tail(60).mean()
+        target_line = max(ma200, year_high * 0.80)
+        rsi = self.calc_rsi(gold).iloc[-1]
+        trend_up = ma20 > ma60
 
+        # 3. 机构级连续宏观打分 (Z-Score)
         tips_mean, tips_std = tips.tail(60).mean(), tips.tail(60).std()
         dxy_mean, dxy_std = dxy.tail(60).mean(), dxy.tail(60).std()
-        macro_score = -0.6 * ((tips.iloc[-1] - tips_mean) / tips_std if tips_std else 0) - 0.4 * (
-            (dxy.iloc[-1] - dxy_mean) / dxy_std if dxy_std else 0)
 
-        new_gold_state = self.sd['gold_state']
-        gold_reason = ""
+        tips_z = (tips.iloc[-1] - tips_mean) / tips_std if tips_std != 0 else 0
+        dxy_z = (dxy.iloc[-1] - dxy_mean) / dxy_std if dxy_std != 0 else 0
 
-        if self.sd['gold_state'] == 'RIGHT' and gc_price < gc_ma60:
-            new_gold_state, gold_reason = 'NONE', "跌破季线，趋势终结"
-        elif self.sd['gold_state'] == 'LEFT':
-            if gc_price < self.sd['left_stop_price']:
-                new_gold_state, gold_reason = 'NONE', "击穿深渊防线，抄底失败"
-            elif gc_price > gc_ma60:
-                new_gold_state, gold_reason = 'RIGHT', "左侧站上季线，加仓至右侧"
+        macro_score = -0.6 * tips_z - 0.4 * dxy_z
+        current_vix = vix.iloc[-1]
 
-        if new_gold_state == 'NONE' and 'GOLD_EXIT' not in self.sd['daily_alerts']:
-            if gc_price > gc_ma20 and gc_trend_up and macro_score > Config.MACRO_THRESHOLD and vix.iloc[
-                -1] < Config.VIX_PANIC_LINE:
-                new_gold_state, gold_reason = 'RIGHT', "宏观顺风+均线多头，右侧全仓"
-            elif gc_price <= gc_target and gc_rsi <= 30 and macro_score > Config.MACRO_THRESHOLD:
-                new_gold_state, gold_reason = 'LEFT', "砸出黄金坑，启动左侧摸底"
-                self.sd['left_stop_price'] = gc_target * 0.95
+        # ---------------------------------
+        # 🌟 仓位自我进化 (左转右)
+        # ---------------------------------
+        if self.sd.get('position', 'NONE') == 'LEFT' and c_price > ma60:
+            self.sd['position'] = 'RIGHT'
+            self.push_alert("🌟【仓位进化】护城河建立",
+                            "左侧抄底仓位已成功站上季线 (MA60)。\n防守策略已切换为：跌破季线离场。")
 
-        gold_weight = 0.80 if new_gold_state == 'RIGHT' else (0.40 if new_gold_state == 'LEFT' else 0.0)
+        # ---------------------------------
+        # 面板状态日志记录
+        # ---------------------------------
+        logger.info(f"▶ 现价: ${c_price:.2f} | 仓位状态: {self.sd.get('position', 'NONE')}")
+        logger.info(f"▶ 均线: MA20 ${ma20:.2f} | MA60 ${ma60:.2f} | MA200 ${ma200:.2f} | 多头排列: {'✅' if trend_up else '❌'}")
+        logger.info(f"▶ 宏观 Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f}) (分界线 {Config.MACRO_THRESHOLD}) | VIX: {current_vix:.2f}")
 
-        new_pool_state, pool_reason = 'CASH', "防御状态，吃逆回购利息"
-        if qqq_price > qqq_ma60:
-            new_pool_state, pool_reason = 'QQQ', "纳指季线上，拥抱科技"
-        elif dia_price > dia_ma60:
-            new_pool_state, pool_reason = 'DIA', "蓝筹季线上，拥抱红利"
-        pool_weight = 1.0 - gold_weight
+        base_info = (f"金价: ${c_price:.2f} | RSI: {rsi:.2f}\n"
+                     f"MA20: ${ma20:.2f} | MA60: ${ma60:.2f}\n"
+                     f"多头排列: {'是' if trend_up else '否'}\n"
+                     f"宏观Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f})")
 
-        logger.info(
-            f"▶ 黄金: {self.sd['gold_state']} -> {new_gold_state} | 蓄水池: {self.sd['pool_state']} -> {new_pool_state}")
+        # ---------------------------------
+        # 🚪 防守与离场决策
+        # ---------------------------------
+        if self.sd.get('position', 'NONE') != 'NONE':
+            exit_reason = None
+            if self.sd.get('position') == 'RIGHT' and c_price < ma60:
+                exit_reason = "趋势彻底破位-跌破季线 MA60"
+            elif self.sd.get('position') == 'LEFT' and c_price < self.sd.get('left_stop_price', 0.0):
+                exit_reason = f"深渊防线被击穿 (跌破 ${self.sd.get('left_stop_price'):.2f})"
 
-        if new_gold_state != self.sd['gold_state'] or new_pool_state != self.sd['pool_state']:
-            alert_id = f"{new_gold_state}_{new_pool_state}"
-            if alert_id not in self.sd['daily_alerts']:
-                self.sd['daily_alerts'].append(alert_id)
-                if new_gold_state == 'NONE' and self.sd['gold_state'] != 'NONE':
-                    self.sd['daily_alerts'].append('GOLD_EXIT')
+            if exit_reason and 'EXIT_CLEAR' not in self.sd['daily_alerts']:
+                self.sd['daily_alerts'].append('EXIT_CLEAR') # JSON 不支持 set，改用 list.append
+                self.sd['position'] = 'NONE'  # 更新状态为空仓
+                msg = f"📢 指令：【清仓撤退，转逆回购】\n触发原因: {exit_reason}。\n不要抱有幻想，严格执行纪律，保住本金等待下一次全仓机会。"
+                self.push_alert("🚨【全仓清盘】防线崩溃预警", f"{msg}\n\n{base_info}")
 
-                msg = (f"【资产再平衡指令】\n\n"
-                       f"1. 黄金动作: {gold_reason if gold_reason else '保持原状'}\n"
-                       f"2. 蓄水池动作: {pool_reason if new_pool_state != self.sd['pool_state'] else '保持原状'}\n\n"
-                       f"请立即按以下比例调仓：\n"
-                       f"[黄金]: {gold_weight * 100:.0f}%\n"
-                       f"[ETF蓄水池 ({new_pool_state})]: {pool_weight * 100:.0f}%")
-                self.push_alert("双核调仓预警 (配置更新)", msg)
+        # ---------------------------------
+        # 🔫 进攻与建仓决策 (⚠️已修复缩进 Bug，现在与防守逻辑平级)
+        # ---------------------------------
+        if 'EXIT_CLEAR' not in self.sd['daily_alerts']:
+            target_exposure = 0.0
+            new_type = self.sd.get('position', 'NONE')
+            reason = ""
 
-        self.sd['gold_state'] = new_gold_state
-        self.sd['pool_state'] = new_pool_state
+            # 【主策略】右侧顺势核弹
+            if c_price > ma20 and trend_up and macro_score > Config.MACRO_THRESHOLD and current_vix < Config.VIX_PANIC_LINE:
+                target_exposure = 0.80
+                new_type = 'RIGHT'
+                reason = "右侧主策略 (80%重仓跟随)"
+
+            # 【机会策略】左侧深渊抄底
+            elif c_price <= target_line and rsi <= 30 and macro_score > Config.MACRO_THRESHOLD:
+                if self.sd.get('position') != 'RIGHT':
+                    target_exposure = 0.40
+                    new_type = 'LEFT'
+                    reason = "左侧机会策略 (40%轻仓摸底)"
+                    self.sd['left_stop_price'] = target_line * 0.95
+
+            # 执行调仓动作
+            if target_exposure > 0:
+                if self.sd.get('position', 'NONE') == 'NONE' or (self.sd.get('position') == 'LEFT' and new_type == 'RIGHT'):
+                    if new_type not in self.sd['daily_alerts']:
+                        self.sd['daily_alerts'].append(new_type)
+                        self.sd['position'] = new_type
+
+                        msg = f"📢 指令：【执行建仓/加仓，目标总仓位 {target_exposure * 100}%】\n触发逻辑：{reason}。\n不要犹豫，立刻按比例配置好仓位，然后关掉软件享受复利。"
+                        self.push_alert("🚀【战术部署】仓位等级变动", f"{msg}\n\n{base_info}")
+
+        # ---------------------------------
+        # 🛌 静默状态播报
+        # ---------------------------------
+        if self.sd.get('position', 'NONE') == 'NONE' and not self.sd['daily_alerts']:
+            logger.info("🛌 阵地静默。不在多头顺风区，安心让资金在 [逆回购] 里赚取年化复利。")
+        elif self.sd.get('position', 'NONE') != 'NONE' and not self.sd['daily_alerts']:
+            logger.info("🛡️ 重兵把守中。已经全仓在车上，关闭软件，享受利润奔跑，无视盘中洗盘。")
+
+        # ==========================================
+        # 💾 终极收尾：状态持久化 (GitHub Actions 核心)
+        # ==========================================
         self.state_manager.save_state()
-
 
 if __name__ == "__main__":
     logger.info("🚀 GitHub Actions 定时任务启动...")
