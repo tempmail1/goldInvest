@@ -114,9 +114,12 @@ class DataEngine:
             result = res.json()['chart']['result'][0]
             timestamps = pd.to_datetime(result['timestamp'], unit='s').normalize()
             closes = result['indicators']['quote'][0]['close']
-            min_len = min(len(timestamps), len(closes))
-            df = pd.DataFrame({'Close': closes[:min_len]}, index=timestamps[:min_len])
-            return df.dropna()[~df.index.duplicated(keep='last')]['Close']
+           
+            df = pd.DataFrame({'Close': closes}, index=timestamps)
+            df = df.dropna()
+            # 剔除雅虎 API 偶尔返回的脏数据（重复日期）
+            df = df[~df.index.duplicated(keep='last')]
+            return df['Close']
         except Exception as e:
             logger.error(f"❌ [拉取失败] {ticker}: {e}")
             self._get_cookie_and_crumb()
