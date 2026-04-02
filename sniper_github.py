@@ -11,7 +11,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
-from datetime import datetime
+from datetime import date,datetime,timedelta
 
 # ==========================================
 # 📝 核心配置：专业日志系统 (双通道输出：控制台 + 文件)
@@ -38,6 +38,7 @@ class Config:
     SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
     AUTH_CODE = os.environ.get("AUTH_CODE", "")
     RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "")
+    FRED_KEY = os.environ.get("FRED_KEY", "")
 
     STATE_FILE = "sniper_state.json"
     MACRO_THRESHOLD = -0.5
@@ -94,12 +95,12 @@ class DataEngine:
         logger.info("🔑 正在与 Yahoo 进行防风控底层握手...")
         try:
             self.session.get('https://fc.yahoo.com', timeout=10)
-        except:
-            pass
-        try:
             res = self.session.get('https://query1.finance.yahoo.com/v1/test/getcrumb', timeout=10)
-            if res.status_code == 200: self.crumb = res.text.strip()
-        except:
+            if res.status_code == 200:
+                logger.info(" 获取crumb成功")
+                self.crumb = res.text.strip()
+        except Exception as e:
+            logger.error(f"❌ [与 Yahoo 进行防风控底层握手失败]: {e}")
             pass
 
     def get_yahoo_data(self, ticker, period="2y"):
@@ -113,7 +114,7 @@ class DataEngine:
             result = res.json()['chart']['result'][0]
             timestamps = pd.to_datetime(result['timestamp'], unit='s').normalize()
             closes = result['indicators']['quote'][0]['close']
-           
+
             df = pd.DataFrame({'Close': closes}, index=timestamps)
             df = df.dropna()
             # 剔除雅虎 API 偶尔返回的脏数据（重复日期）
@@ -126,12 +127,47 @@ class DataEngine:
 
     def get_fred_tips(self):
         try:
-            url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10"
-            res = requests.get(url, timeout=15)
-            df = pd.read_csv(io.StringIO(res.text), parse_dates=[0], index_col=0, na_values='.')
+            api_key = Config.FRED_KEY
+
+            url = "https://api.stlouisfed.org/fred/series/observations"
+            start_date = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+
+            params = {
+                "series_id": "DFII10",
+                "api_key": api_key,
+                "file_type": "json",
+                "observation_start": start_date,
+                "sort_order": "desc"
+            }
+
+            res = requests.get(url, params=params, timeout=15)
+            res.raise_for_status()  # 检查 HTTP 状态码，如果不是 200 会抛出异常
+
+            data = res.json()
+            observations = data.get("observations", [])
+
+            # 将 JSON 列表转换为 DataFrame
+            df = pd.DataFrame(observations)
+
+            # 只保留所需列，并重命名
+            df = df[['date', 'value']].rename(columns={'value': 'DFII10'})
+
+            # 将日期列转换为 datetime 格式，并设置为索引
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+
+            # 将数值转换为浮点数，errors='coerce' 会完美替代之前的 na_values='.'
+            # 它会将所有无法转换为数字的字符（如 "."）安全地转换为 NaN
+            df['DFII10'] = pd.to_numeric(df['DFII10'], errors='coerce')
+
+            # 剔除包含 NaN 的行（周末、节假日）
             df = df.dropna()
+
+            # 去重，保留最后一条，并返回 Pandas Series (与原代码行为一致)
             return df[~df.index.duplicated(keep='last')]['DFII10']
-        except:
+
+        except Exception as e:
+            logger.error(f"❌ [拉取FRED API 数据失败]: {e}")
             return None
 
 
@@ -194,7 +230,7 @@ class DualCoreSniper:
         if self.sd.get('current_date') != today:
             self.sd['current_date'] = today
             self.sd['daily_alerts'] = []
-            logger.info(f"\n🌅 新交易日 [{today}] 开启，阵地雷达已刷新。")
+            logger.info(f"🌅 新交易日 [{today}] 开启，阵地雷达已刷新。")
 
         logger.info(f"\n[{current_time}] 📡 启动 Z-Score 宏观扫描与均线核对...")
 
@@ -241,8 +277,10 @@ class DualCoreSniper:
         # 面板状态日志记录
         # ---------------------------------
         logger.info(f"▶ 现价: ${c_price:.2f} | 仓位状态: {self.sd.get('position', 'NONE')}")
-        logger.info(f"▶ 均线: MA20 ${ma20:.2f} | MA60 ${ma60:.2f} | MA200 ${ma200:.2f} | 多头排列: {'✅' if trend_up else '❌'}")
-        logger.info(f"▶ 宏观 Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f}) (分界线 {Config.MACRO_THRESHOLD}) | VIX: {current_vix:.2f}")
+        logger.info(
+            f"▶ 均线: MA20 ${ma20:.2f} | MA60 ${ma60:.2f} | MA200 ${ma200:.2f} | 多头排列: {'✅' if trend_up else '❌'}")
+        logger.info(
+            f"▶ 宏观 Z-Score: {macro_score:.2f} (TIPS: {tips.iloc[-1]:.2f}%, DXY: {dxy.iloc[-1]:.2f}) (分界线 {Config.MACRO_THRESHOLD}) | VIX: {current_vix:.2f}")
 
         base_info = (f"现价: ${c_price:.2f} | RSI: {rsi:.2f}\n"
                      f"MA20: ${ma20:.2f} | MA60: ${ma60:.2f} | MA200 ${ma200:.2f} \n"
@@ -260,7 +298,7 @@ class DualCoreSniper:
                 exit_reason = f"深渊防线被击穿 (跌破 ${self.sd.get('left_stop_price'):.2f})"
 
             if exit_reason and 'EXIT_CLEAR' not in self.sd['daily_alerts']:
-                self.sd['daily_alerts'].append('EXIT_CLEAR') # JSON 不支持 set，改用 list.append
+                self.sd['daily_alerts'].append('EXIT_CLEAR')  # JSON 不支持 set，改用 list.append
                 self.sd['position'] = 'NONE'  # 更新状态为空仓
                 msg = f"📢 指令：【清仓撤退，转逆回购】\n触发原因: {exit_reason}。\n不要抱有幻想，严格执行纪律，保住本金等待下一次全仓机会。"
                 self.push_alert("🚨【全仓清盘】防线崩溃预警", f"{msg}\n\n{base_info}")
@@ -289,7 +327,8 @@ class DualCoreSniper:
 
             # 执行调仓动作
             if target_exposure > 0:
-                if self.sd.get('position', 'NONE') == 'NONE' or (self.sd.get('position') == 'LEFT' and new_type == 'RIGHT'):
+                if self.sd.get('position', 'NONE') == 'NONE' or (
+                        self.sd.get('position') == 'LEFT' and new_type == 'RIGHT'):
                     if new_type not in self.sd['daily_alerts']:
                         self.sd['daily_alerts'].append(new_type)
                         self.sd['position'] = new_type
@@ -311,8 +350,9 @@ class DualCoreSniper:
         # ==========================================
         self.state_manager.save_state()
 
+
 if __name__ == "__main__":
-    logger.info("🚀 GitHub Actions 定时任务启动...")
+    logger.info("++++++🚀 GitHub Actions 定时任务启动++++++")
     sm = LocalStateManager()
     sniper = DualCoreSniper(sm)
     sniper.run_scan()
