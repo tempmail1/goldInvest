@@ -39,6 +39,7 @@ class Config:
     AUTH_CODE = os.environ.get("AUTH_CODE", "")
     RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "")
     FRED_APIKEY = os.environ.get("FRED_APIKEY", "")
+
     logger.info(f"SENDER_EMAIL={SENDER_EMAIL}  AUTH_CODE={AUTH_CODE}  RECEIVER_EMAIL={RECEIVER_EMAIL}  FRED_APIKEY={FRED_APIKEY}")
     STATE_FILE = "sniper_state.json"
     MACRO_THRESHOLD = -0.5
@@ -129,8 +130,8 @@ class DataEngine:
 
     def get_fred_tips(self):
         try:
-            api_key = Config.FRED_KEY
-            logger.info(f" FRED_KEY = {api_key}")
+            api_key = Config.FRED_APIKEY
+            logger.info(f" FRED_APIKEY = {api_key}")
             url = "https://api.stlouisfed.org/fred/series/observations"
             start_date = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
 
