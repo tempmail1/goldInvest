@@ -64,11 +64,11 @@ class LocalStateManager:
             try:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
                     self.state = json.load(f)
-                logger.info("✅ 成功读取历史状态记忆。")
+                logger.info("✅ 成功读取历史状态记忆-----")
             except Exception as e:
                 logger.warning(f"⚠️ 读取状态失败，使用默认初始化状态: {e}")
         else:
-            logger.info("🆕 未发现历史状态，创建全新初始化状态。")
+            logger.info("🆕 未发现历史状态，创建全新初始化状态-----")
 
     def save_state(self):
         try:
@@ -92,13 +92,15 @@ class DataEngine:
         self._get_cookie_and_crumb()
 
     def _get_cookie_and_crumb(self):
-        logger.info("🔑 正在与 Yahoo 进行防风控底层握手...")
+        logger.info(" 正在与 Yahoo 进行防风控底层握手-----")
         try:
             self.session.get('https://fc.yahoo.com', timeout=10)
             res = self.session.get('https://query1.finance.yahoo.com/v1/test/getcrumb', timeout=10)
             if res.status_code == 200:
                 logger.info(" 获取crumb成功")
                 self.crumb = res.text.strip()
+            else:
+                logger.warn(" 未能获取crumb")
         except Exception as e:
             logger.error(f"❌ [与 Yahoo 进行防风控底层握手失败]: {e}")
             pass
