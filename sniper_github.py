@@ -38,8 +38,8 @@ class Config:
     SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
     AUTH_CODE = os.environ.get("AUTH_CODE", "")
     RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", "")
-    FRED_KEY = os.environ.get("FRED_KEY", "95714a089f6f430be7e09bb721620091")
-
+    FRED_APIKEY = os.environ.get("FRED_APIKEY", "")
+    logger.info(f"SENDER_EMAIL={SENDER_EMAIL}  AUTH_CODE={AUTH_CODE}  RECEIVER_EMAIL={RECEIVER_EMAIL}  FRED_APIKEY={FRED_APIKEY}")
     STATE_FILE = "sniper_state.json"
     MACRO_THRESHOLD = -0.5
     VIX_PANIC_LINE = 35.0
