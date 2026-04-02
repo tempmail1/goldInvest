@@ -1,9 +1,7 @@
 name: Quant Dual-Core Sniper
 
 on:
-  schedule:
-    - cron: '0 * * * *'
-  
+ 
   workflow_dispatch:
   # 3. 🌟 新增：外部专属接口 (Webhook) 监听器
   repository_dispatch:
