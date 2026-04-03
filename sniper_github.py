@@ -1,6 +1,7 @@
 import os
 import requests
 import pandas as pd
+import pandas_ta as ta
 import akshare as ak
 import time
 import io
@@ -297,13 +298,25 @@ class DualCoreSniper:
 
         # 2. 技术指标计算
         c_price = gold.iloc[-1]
-        ma20 = gold.tail(20).mean()
-        ma60 = gold.tail(60).mean()
-        ma200 = gold.tail(200).mean()
-        year_high = gold.tail(252).max()
+        # 以下tail方法计算均值不专业
+        #ma20 = gold.tail(20).mean()
+        #ma60 = gold.tail(60).mean()
+        #ma200 = gold.tail(200).mean()
+        #year_high = gold.tail(252).max()
+        ma20 = gold.ta.sma(length=20).iloc[-1]
+        ma60 = gold.ta.sma(length=60).iloc[-1]
+        ma200 = gold.ta.sma(length=200).iloc[-1]
+        # 计算 252 日唐奇安通道
+        # 返回的 DataFrame 包含三列：DCL (下轨/前低), DCM (中轨), DCU (上轨/前高)
+        donchian_df = gold.ta.donchian(lower_length=252, upper_length=252)
+        # 提取上轨（即滚动的前 252 日最高价）
+        # 注意：pandas-ta 的 donchian 默认已经做好了滞后处理，它代表的就是前期的极值
+        year_high_series = donchian_df['DCU_252_252']
+        year_high = year_high_series.iloc[-1]   #今天的阻力线（近1年前高）
 
         target_line = max(ma200, year_high * 0.80)
-        rsi = self.calc_rsi(gold).iloc[-1]
+        # 不够专业 rsi = self.calc_rsi(gold).iloc[-1]
+        rsi = gold.ta.rsi(length=14).iloc(-1)
         trend_up = ma20 > ma60
 
         # 3. 机构级连续宏观打分 (Z-Score)
