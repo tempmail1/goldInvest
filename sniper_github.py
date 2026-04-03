@@ -1,6 +1,7 @@
 import os
 import requests
 import pandas as pd
+import akshare as ak
 import time
 import io
 import json
@@ -106,6 +107,41 @@ class DataEngine:
             logger.error(f"❌ [与 Yahoo 进行防风控底层握手失败]: {e}")
             pass
 
+    def get_au9999_data(self):
+        """
+        通过 AKShare 获取上海黄金交易所 Au99.99 的历史日线数据
+        """
+        try:
+            # 1. 🚨 核心修复：使用专用的 SGE 历史行情接口，代码严格指定为 "Au99.99"
+            df = ak.spot_hist_sge(symbol="Au99.99")
+
+            # 如果因为网络原因未抓取到数据，提前拦截
+            if df is None or df.empty:
+                logger.error("⚠️ 未能获取到 Au99.99 历史数据。")
+                return None
+
+            # 2. 将列名标准化并设置为索引 (AKShare返回的列名默认是小写 date, close)
+            df.rename(columns={'date': 'Date', 'close': 'Close'}, inplace=True)
+            df['Date'] = pd.to_datetime(df['Date'])
+            df.set_index('Date', inplace=True)
+
+            # 3. 提取收盘价序列，并强制转换为浮点数（防止 API 返回字符串格式导致无法计算均线）
+            close_series = pd.to_numeric(df['Close'], errors='coerce')
+
+            # 4. 清洗：去除空值和可能的重复日期
+            close_series = close_series.dropna()
+            close_series = close_series[~close_series.index.duplicated(keep='last')]
+
+            # 5. 强制按照日期升序排列（最老在上面，最新在下面），严防未来函数
+            close_series.sort_index(ascending=True, inplace=True)
+
+            return close_series
+
+        except Exception as e:
+            logger.error(f"❌ 获取 Au99.99 数据失败: {e}")
+            return None
+
+
     def get_yahoo_data(self, ticker, period="2y"):
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
         params = {"range": period, "interval": "1d"}
@@ -122,7 +158,7 @@ class DataEngine:
             try:
                 closes = result['indicators']['adjclose'][0]['adjclose']
             except KeyError:
-                closes = result['indicators']['quote'][0]['close']            
+                closes = result['indicators']['quote'][0]['close']
             df = pd.DataFrame({'Close': closes}, index=timestamps)
             # 先本地化为 UTC，再转为上海时区，最后 normalize 截取日期部分
             df.index = df.index.tz_localize('UTC').tz_convert('Asia/Shanghai').normalize()
@@ -250,7 +286,8 @@ class DualCoreSniper:
 
         # 1. 拉取数据 (保证充足的历史数据用于滚动计算)
         tips = self.engine.get_fred_tips()
-        gold = self.engine.get_yahoo_data("518880.SS", period="2y")
+        #gold = self.engine.get_yahoo_data("518880.SS", period="2y")
+        gold = self.engine.get_au9999_data()
         dxy = self.engine.get_yahoo_data("DX-Y.NYB", period="1y")
         vix = self.engine.get_yahoo_data("^VIX", period="1y")
 
@@ -272,7 +309,7 @@ class DualCoreSniper:
         # 3. 机构级连续宏观打分 (Z-Score)
         historical_60 = tips.iloc[-61:-1]    # 精准切片：取倒数第 61 个到倒数第 2 个数据（不包含最新的一天，共计60天）
         tips_mean, tips_std = historical_60.mean(), historical_60.std()
-        historical_60 = dxy.iloc[-61:-1] 
+        historical_60 = dxy.iloc[-61:-1]
         dxy_mean, dxy_std = historical_60.mean(), historical_60.std()
 
         tips_z = (tips.iloc[-1] - tips_mean) / tips_std if tips_std != 0 else 0
