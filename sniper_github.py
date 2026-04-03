@@ -117,14 +117,22 @@ class DataEngine:
             result = res.json()['chart']['result'][0]
             # 1. 解析时间戳 (保留 UTC 原始日期，不强行 normalize，避免跨时区错位)
             timestamps = pd.to_datetime(result['timestamp'], unit='s')
-            closes = result['indicators']['quote'][0]['close']
-
+            # 2. 优先尝试获取复权收盘价 (Adj Close)，如果没有则退回普通 Close
+            # 这点对 ETF 极其重要，对期货无影响但更稳健
+            try:
+                closes = result['indicators']['adjclose'][0]['adjclose']
+            except KeyError:
+                closes = result['indicators']['quote'][0]['close']            
             df = pd.DataFrame({'Close': closes}, index=timestamps)
-            # 将时区转换为美国东部时间并提取日期，这是对齐美股/COMEX的最准做法
-            df.index = df.index.tz_localize('UTC').tz_convert('America/New_York').normalize()
+            # 先本地化为 UTC，再转为上海时区，最后 normalize 截取日期部分
+            df.index = df.index.tz_localize('UTC').tz_convert('Asia/Shanghai').normalize()
             df = df.dropna()
             # 剔除雅虎 API 偶尔返回的脏数据（重复日期）
             df = df[~df.index.duplicated(keep='last')]
+            meta = result.get('meta', {})
+            realtime_price = meta.get('regularMarketPrice')
+            if realtime_price is not None and not df.empty:
+                df.iloc[-1] = realtime_price
             return df['Close']
         except Exception as e:
             logger.error(f"❌ [拉取失败] {ticker}: {e}")
@@ -242,7 +250,7 @@ class DualCoreSniper:
 
         # 1. 拉取数据 (保证充足的历史数据用于滚动计算)
         tips = self.engine.get_fred_tips()
-        gold = self.engine.get_yahoo_data("GC=F", period="2y")
+        gold = self.engine.get_yahoo_data("518880.SS", period="2y")
         dxy = self.engine.get_yahoo_data("DX-Y.NYB", period="1y")
         vix = self.engine.get_yahoo_data("^VIX", period="1y")
 
