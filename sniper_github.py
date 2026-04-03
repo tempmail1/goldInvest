@@ -115,10 +115,13 @@ class DataEngine:
             res = self.session.get(url, params=params, timeout=15)
             res.raise_for_status()
             result = res.json()['chart']['result'][0]
-            timestamps = pd.to_datetime(result['timestamp'], unit='s').normalize()
+            # 1. 解析时间戳 (保留 UTC 原始日期，不强行 normalize，避免跨时区错位)
+            timestamps = pd.to_datetime(result['timestamp'], unit='s')
             closes = result['indicators']['quote'][0]['close']
 
             df = pd.DataFrame({'Close': closes}, index=timestamps)
+            # 将时区转换为美国东部时间并提取日期，这是对齐美股/COMEX的最准做法
+            df.index = df.index.tz_localize('UTC').tz_convert('America/New_York').normalize()
             df = df.dropna()
             # 剔除雅虎 API 偶尔返回的脏数据（重复日期）
             df = df[~df.index.duplicated(keep='last')]
@@ -133,14 +136,14 @@ class DataEngine:
             api_key = Config.FRED_APIKEY
             #logger.info(f" FRED_APIKEY = {api_key}")
             url = "https://api.stlouisfed.org/fred/series/observations"
-            start_date = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+            start_date = (date.today() - timedelta(days=120)).strftime("%Y-%m-%d")
 
             params = {
                 "series_id": "DFII10",
                 "api_key": api_key,
                 "file_type": "json",
                 "observation_start": start_date,
-                "sort_order": "desc"
+                "sort_order": "asc"
             }
 
             res = requests.get(url, params=params, timeout=15)
@@ -238,8 +241,8 @@ class DualCoreSniper:
         logger.info(f"\n[{current_time}] 📡 启动 Z-Score 宏观扫描与均线核对...")
 
         # 1. 拉取数据 (保证充足的历史数据用于滚动计算)
-        gold = self.engine.get_yahoo_data("GC=F", period="2y")
         tips = self.engine.get_fred_tips()
+        gold = self.engine.get_yahoo_data("GC=F", period="2y")
         dxy = self.engine.get_yahoo_data("DX-Y.NYB", period="1y")
         vix = self.engine.get_yahoo_data("^VIX", period="1y")
 
@@ -259,8 +262,10 @@ class DualCoreSniper:
         trend_up = ma20 > ma60
 
         # 3. 机构级连续宏观打分 (Z-Score)
-        tips_mean, tips_std = tips.tail(60).mean(), tips.tail(60).std()
-        dxy_mean, dxy_std = dxy.tail(60).mean(), dxy.tail(60).std()
+        historical_60 = tips.iloc[-61:-1]    # 精准切片：取倒数第 61 个到倒数第 2 个数据（不包含最新的一天，共计60天）
+        tips_mean, tips_std = historical_60.mean(), historical_60.std()
+        historical_60 = dxy.iloc[-61:-1] 
+        dxy_mean, dxy_std = historical_60.mean(), historical_60.std()
 
         tips_z = (tips.iloc[-1] - tips_mean) / tips_std if tips_std != 0 else 0
         dxy_z = (dxy.iloc[-1] - dxy_mean) / dxy_std if dxy_std != 0 else 0
